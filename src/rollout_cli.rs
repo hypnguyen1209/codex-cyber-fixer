@@ -54,8 +54,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--mode" | "-m" => {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or("");
-                a.mode = CleanMode::parse(v)
-                    .ok_or_else(|| format!("invalid --mode \"{v}\" (use neutralize | drop-event | drop-turn)"))?;
+                a.mode = CleanMode::parse(v).ok_or_else(|| {
+                    format!("invalid --mode \"{v}\" (use neutralize | drop-event | drop-turn)")
+                })?;
             }
             _ => {
                 if arg.starts_with('-') {
@@ -116,7 +117,8 @@ fn codex_sessions_dir() -> PathBuf {
 }
 
 fn has_glob_chars(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
+    s.chars()
+        .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 fn is_artefact(name: &str) -> bool {
@@ -149,7 +151,10 @@ fn resolve_token(token: &str) -> Result<Vec<String>, String> {
     // 3) otherwise treat as a session id -> search the sessions dir
     let dir = codex_sessions_dir();
     if !dir.is_dir() {
-        return Err(format!("no file or session matched \"{token}\" (looked in {})", dir.display()));
+        return Err(format!(
+            "no file or session matched \"{token}\" (looked in {})",
+            dir.display()
+        ));
     }
     let mut real: Vec<String> = Vec::new();
     for e in WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
@@ -163,7 +168,10 @@ fn resolve_token(token: &str) -> Result<Vec<String>, String> {
     }
     match real.len() {
         1 => Ok(real),
-        0 => Err(format!("no file or session matched \"{token}\" (looked in {})", dir.display())),
+        0 => Err(format!(
+            "no file or session matched \"{token}\" (looked in {})",
+            dir.display()
+        )),
         n => Err(format!(
             "session id \"{token}\" is ambiguous ({n} matches):\n  {}",
             real.join("\n  ")
@@ -193,10 +201,16 @@ fn summarize(s: &CleanStats) -> String {
         parts.push(format!("{} event(s) dropped", s.events_dropped));
     }
     if s.turns_dropped > 0 {
-        parts.push(format!("{} turn(s) dropped ({} lines)", s.turns_dropped, s.turn_lines_dropped));
+        parts.push(format!(
+            "{} turn(s) dropped ({} lines)",
+            s.turns_dropped, s.turn_lines_dropped
+        ));
     }
     if s.content_parts_stripped > 0 {
-        parts.push(format!("{} content part(s) stripped", s.content_parts_stripped));
+        parts.push(format!(
+            "{} content part(s) stripped",
+            s.content_parts_stripped
+        ));
     }
     if s.messages_dropped > 0 {
         parts.push(format!("{} message(s) dropped", s.messages_dropped));
@@ -231,7 +245,11 @@ pub fn clean_rollout_in_place(tokens: &[String], opts: &InPlaceOpts) -> InPlaceR
         Ok(f) => f,
         Err(e) => {
             eprintln!("  rollout: {e}");
-            return InPlaceResult { scanned: 0, changed: 0, failures: 1 };
+            return InPlaceResult {
+                scanned: 0,
+                changed: 0,
+                failures: 1,
+            };
         }
     };
 
@@ -262,7 +280,11 @@ pub fn clean_rollout_in_place(tokens: &[String], opts: &InPlaceOpts) -> InPlaceR
             failures += 1;
         }
     }
-    InPlaceResult { scanned: files.len(), changed, failures }
+    InPlaceResult {
+        scanned: files.len(),
+        changed,
+        failures,
+    }
 }
 
 fn write_in_place(file: &str, input: &str, output: &str, no_backup: bool) -> std::io::Result<()> {
@@ -365,7 +387,11 @@ pub fn run_rollout_cli(argv: &[String]) -> i32 {
             "\n{} file(s) scanned, {} with refusals{}.",
             files.len(),
             changed_count,
-            if args.dry_run { " (dry-run, nothing written)" } else { "" }
+            if args.dry_run {
+                " (dry-run, nothing written)"
+            } else {
+                ""
+            }
         );
     }
     if failures > 0 {
