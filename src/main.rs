@@ -8,6 +8,7 @@
 
 mod db;
 mod db_cli;
+mod leet;
 mod rollout;
 mod rollout_cli;
 

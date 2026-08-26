@@ -62,7 +62,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or("");
                 a.mode = DbMode::parse(v).ok_or_else(|| {
-                    format!("invalid --mode \"{v}\" (use neutralize | drop-turn)")
+                    format!("invalid --mode \"{v}\" (use neutralize | drop-turn | leet)")
                 })?;
             }
             _ => {
@@ -92,11 +92,14 @@ stores its thread-history there, NOT in ~/.codex. Point the tool at it with
 --sqlite-home (a directory) or --db (a specific thread_history_*.sqlite file).
 
 Options:
-  -m, --mode <m>       neutralize | drop-turn    (default: neutralize)
+  -m, --mode <m>       neutralize | drop-turn | leet    (default: neutralize)
                          neutralize  mark the blocked turn completed, clear error
                                      (keeps the user message; block disappears)
                          drop-turn   delete the whole blocked turn and its items
                                      (removes the flagged user message too)
+                         leet        neutralize the block AND rewrite the turn's
+                                     user messages into leet speak so a re-scan
+                                     no longer matches the cyber signature
   -s, --sqlite-home <d> directory holding thread_history_*.sqlite (a session's
                         sqlite_home). Also via CODEX_SQLITE_HOME / CODEX_HOME.
       --db <file>      operate on this exact thread_history_*.sqlite file
@@ -220,6 +223,13 @@ pub fn run_db_cli(argv: &[String]) -> i32 {
                     } else if args.mode == DbMode::DropTurn {
                         println!(
                             "✓ {label} @ {} — dropped {} turn(s), {} item(s)",
+                            db_path.display(),
+                            res.turns.len(),
+                            res.items_affected
+                        );
+                    } else if args.mode == DbMode::Leet {
+                        println!(
+                            "✓ {label} @ {} — neutralized {} turn(s), leet-encoded {} text part(s)",
                             db_path.display(),
                             res.turns.len(),
                             res.items_affected

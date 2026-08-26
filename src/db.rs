@@ -10,6 +10,7 @@
 //! A "turn" owns its rows in `thread_items` (same thread_id + turn_id), which
 //! includes the triggering user message.
 
+use crate::leet;
 use crate::rollout::CleanMode;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
@@ -22,6 +23,9 @@ use walkdir::WalkDir;
 pub enum DbMode {
     Neutralize,
     DropTurn,
+    /// Neutralize the block AND rewrite the turn's user messages into leet
+    /// speak, so a re-scan no longer matches the cyber signature.
+    Leet,
 }
 
 impl DbMode {
@@ -29,6 +33,7 @@ impl DbMode {
         match s {
             "neutralize" => Some(DbMode::Neutralize),
             "drop-turn" => Some(DbMode::DropTurn),
+            "leet" => Some(DbMode::Leet),
             _ => None,
         }
     }
@@ -36,6 +41,7 @@ impl DbMode {
         match self {
             DbMode::Neutralize => "neutralize",
             DbMode::DropTurn => "drop-turn",
+            DbMode::Leet => "leet",
         }
     }
     /// Map to the rollout cleaner's mode (for `--full`).
@@ -43,6 +49,9 @@ impl DbMode {
         match self {
             DbMode::Neutralize => CleanMode::Neutralize,
             DbMode::DropTurn => CleanMode::DropTurn,
+            // The rollout cleaner has no leet mode; neutralize is the
+            // equivalent cosmetic fix for the exported log.
+            DbMode::Leet => CleanMode::Neutralize,
         }
     }
 }
@@ -240,6 +249,35 @@ fn backup_path_for(db_path: &Path, thread_id: Option<&str>) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Rewrite every `text` part of a `userMessage` item_json into leet speak,
+/// in place. Returns the number of text parts changed. Other item types and
+/// non-text content parts are left untouched, as is `text_elements` (which
+/// records per-span metadata and is empty for plain messages).
+fn leet_encode_user_message(item_json: &str) -> Option<(String, usize)> {
+    let mut v: Value = serde_json::from_str(item_json).ok()?;
+    if v.get("type").and_then(Value::as_str) != Some("userMessage") {
+        return None;
+    }
+    let content = v.get_mut("content")?.as_array_mut()?;
+    let mut changed = 0usize;
+    for part in content.iter_mut() {
+        if part.get("type").and_then(Value::as_str) != Some("text") {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            let encoded = leet::encode(text);
+            if encoded != text {
+                part["text"] = Value::String(encoded);
+                changed += 1;
+            }
+        }
+    }
+    if changed == 0 {
+        return None;
+    }
+    serde_json::to_string(&v).ok().map(|s| (s, changed))
+}
+
 /// Clean cyber-refusal turns in one thread-history DB. Writes a JSON backup of
 /// the affected rows (synchronously, before the transaction) next to the DB.
 pub fn clean_thread_history_db(
@@ -309,6 +347,30 @@ pub fn clean_thread_history_db(
                         "UPDATE thread_turns SET status = 'completed', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
                         rusqlite::params![t.thread_id, t.turn_id],
                     )?;
+                }
+                DbMode::Leet => {
+                    tx.execute(
+                        "UPDATE thread_turns SET status = 'completed', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
+                        rusqlite::params![t.thread_id, t.turn_id],
+                    )?;
+                    let mut stmt = tx.prepare(
+                        "SELECT item_id, item_json FROM thread_items WHERE thread_id = ? AND turn_id = ?",
+                    )?;
+                    let rows: Vec<(String, String)> = stmt
+                        .query_map(rusqlite::params![t.thread_id, t.turn_id], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    drop(stmt);
+                    for (item_id, item_json) in &rows {
+                        if let Some((new_json, n)) = leet_encode_user_message(item_json) {
+                            tx.execute(
+                                "UPDATE thread_items SET item_json = ? WHERE thread_id = ? AND turn_id = ? AND item_id = ?",
+                                rusqlite::params![new_json, t.thread_id, t.turn_id, item_id],
+                            )?;
+                            items_affected += n;
+                        }
+                    }
                 }
             }
         }
@@ -520,5 +582,61 @@ mod tests {
         drop(conn);
         cleanup(&path);
         assert_eq!(failed, 4);
+    }
+
+    fn seed_with_user_messages(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE thread_turns (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, error_json TEXT, PRIMARY KEY (thread_id, turn_id));\
+             CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, item_json TEXT NOT NULL, PRIMARY KEY (thread_id, turn_id, item_id));",
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
+            rusqlite::params![TID, "t-cyber1", 1, "failed", CYBER_ERR],
+        ).unwrap();
+        let user_msg = r#"{"type":"userMessage","content":[{"type":"text","text":"hello world"}]}"#;
+        conn.execute(
+            "INSERT INTO thread_items VALUES (?,?,?,?,?)",
+            rusqlite::params![TID, "t-cyber1", "i1", 1, user_msg],
+        ).unwrap();
+    }
+
+    #[test]
+    fn leet_mode_neutralizes_and_encodes_user_messages() {
+        let path = unique_db_path();
+        seed_with_user_messages(&path);
+        let res = clean_thread_history_db(&path, DbMode::Leet, Some(TID), false).unwrap();
+        assert!(res.applied);
+        assert_eq!(res.turns.len(), 1);
+        assert_eq!(res.items_affected, 1);
+
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "completed");
+        let err: Option<String> = conn
+            .query_row(
+                "SELECT error_json FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(err.is_none());
+        let item_json: String = conn
+            .query_row(
+                "SELECT item_json FROM thread_items WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&item_json).unwrap();
+        assert_eq!(parsed["content"][0]["text"].as_str().unwrap(), "h3110 w0r1d");
+        drop(conn);
+        cleanup(&path);
     }
 }

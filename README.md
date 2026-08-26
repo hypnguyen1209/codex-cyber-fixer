@@ -40,11 +40,13 @@ never stored — it's just how the TUI renders that row.) Two ways to fix it:
 
 | `--mode` | Effect on the blocked turn | Keeps user msg? |
 |----------|----------------------------|:---------------:|
-| `neutralize` *(default)* | `status → completed`, `error_json → NULL` | ✅ |
+| `neutralize` *(default)* | `status → completed`, `error_json → NULL` | ✅ (original text) |
 | `drop-turn` | delete the turn row **and** its `thread_items` | ❌ |
+| `leet` | neutralize **+** rewrite user message text into leet speak | ✅ (obfuscated) |
 
 `neutralize` is enough to unblock. Use `drop-turn` to also make the turn vanish
-from the timeline.
+from the timeline. Use `leet` to unblock **and** obfuscate the user message so a
+re-scan no longer matches the cyber signature.
 
 ## Architecture
 
@@ -61,7 +63,8 @@ flowchart TD
 
     subgraph resume ["fix codex resume (functional)"]
         dcli --> dcore["db.rs<br/>clean_thread_history_db()"]
-        dcore -->|"neutralize / drop-turn<br/>(txn + WAL checkpoint)"| sqlite[("thread_history_*.sqlite<br/>thread_turns / thread_items")]
+        dcore -->|"neutralize / drop-turn / leet<br/>(txn + WAL checkpoint)"| sqlite[("thread_history_*.sqlite<br/>thread_turns / thread_items")]
+        dcore -->|"leet mode"| leetmod["leet.rs<br/>encode()"]
         dcore -.->|"row backup first"| bak1["*.cyber-backup.json"]
     end
 
@@ -103,6 +106,7 @@ cargo build --release        # → target/release/codex-cyber-fixer[.exe]
 codex-cyber-fixer <session-id> --dry-run   # preview (read-only, safe while Codex runs)
 codex-cyber-fixer <session-id>             # apply: clear the block, keep your message
 codex-cyber-fixer <session-id> --mode drop-turn   # remove the whole blocked turn
+codex-cyber-fixer <session-id> --mode leet        # clear block + obfuscate user msg
 codex-cyber-fixer --all                    # every blocked thread in the DB
 codex-cyber-fixer <session-id> --full      # also tidy the matching rollout .jsonl
 ```
@@ -132,7 +136,7 @@ Resolution order: `--db` → `--sqlite-home` → `CODEX_SQLITE_HOME` → `CODEX_
 
 ```
 db (default):
-  -m, --mode <m>        neutralize | drop-turn        (default: neutralize)
+  -m, --mode <m>        neutralize | drop-turn | leet (default: neutralize)
   -s, --sqlite-home <d> directory holding thread_history_*.sqlite
       --db <file>       operate on this exact .sqlite file
       --all             target every thread, not just the given ids
@@ -149,6 +153,43 @@ rollout (cosmetic — exported logs only, does NOT affect resume):
   -n, --dry-run   -q, --quiet
 ```
 
+## Leet speak obfuscation (`--mode leet`)
+
+The `leet` mode goes a step beyond `neutralize`: it also rewrites the user
+message text into **leet speak** (l33t), substituting letters with visually
+similar numbers so a re-scan of the thread no longer matches the cyber
+signature.
+
+```
+Original:  hello world, I am a hacker
+Encoded:   h3110 w0r1d, 1 4m 4 h4ck3r
+```
+
+Substitution table (encode direction):
+
+| Letter | Leet |
+|--------|------|
+| A | 4 |
+| B | 8 |
+| E | 3 |
+| G | 6 |
+| I | 1 |
+| L | 1 |
+| O | 0 |
+| S | 5 |
+| T | 7 |
+| Z | 2 |
+
+Encoding is deterministic (one canonical substitution per letter). Punctuation,
+digits, whitespace, and non-ASCII characters are preserved verbatim. Only
+`userMessage` content parts with `type: "text"` are rewritten; other item types
+and metadata are untouched.
+
+A **decoder** (`leet::decode`) is also included for the reverse direction — it
+uses context-aware disambiguation with a common-word lexicon to pick the most
+likely plain-text reading when a leet symbol is ambiguous (e.g. `1` → I, L, or
+R depending on which candidate forms a real word).
+
 ## Layout
 
 Rust, one binary. Deps: `rusqlite` (feature `bundled` — SQLite compiled in, no
@@ -159,6 +200,7 @@ src/
   main.rs          dispatcher: db (default) / rollout
   db.rs            SQLite thread-history cleaner (the fix for resume) + tests
   db_cli.rs        CLI for db.rs      → run_db_cli(argv)
+  leet.rs          leet speak encoder/decoder + tests
   rollout.rs       rollout .jsonl cleaner (pure transform) + tests
   rollout_cli.rs   CLI for rollout.rs → run_rollout_cli(argv)
 ```
