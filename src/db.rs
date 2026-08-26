@@ -593,12 +593,14 @@ mod tests {
         conn.execute(
             "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
             rusqlite::params![TID, "t-cyber1", 1, "failed", CYBER_ERR],
-        ).unwrap();
+        )
+        .unwrap();
         let user_msg = r#"{"type":"userMessage","content":[{"type":"text","text":"hello world"}]}"#;
         conn.execute(
             "INSERT INTO thread_items VALUES (?,?,?,?,?)",
             rusqlite::params![TID, "t-cyber1", "i1", 1, user_msg],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -635,7 +637,10 @@ mod tests {
             )
             .unwrap();
         let parsed: Value = serde_json::from_str(&item_json).unwrap();
-        assert_eq!(parsed["content"][0]["text"].as_str().unwrap(), "h3110 w0r1d");
+        assert_eq!(
+            parsed["content"][0]["text"].as_str().unwrap(),
+            "h3110 w0r1d"
+        );
         drop(conn);
         cleanup(&path);
     }

@@ -73,13 +73,12 @@ fn decode_symbol(c: char) -> &'static [&'static str] {
 /// reading a human would pick, not to be a full dictionary.
 const COMMON_WORDS: &[&str] = &[
     "a", "am", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "for", "from",
-    "had", "has", "have", "he", "hello", "her", "here", "him", "his", "how", "i", "if", "in",
-    "is", "it", "its", "me", "my", "no", "not", "now", "of", "on", "or", "our", "out", "she",
-    "so", "that", "the", "their", "them", "there", "they", "this", "to", "up", "us", "was", "we",
-    "what", "when", "who", "will", "with", "world", "you", "your", "hacker", "scan", "tool",
-    "code", "script", "test", "file", "run", "all", "one", "two", "see", "go", "let", "lol",
-    "elite", "leet", "own", "pwn", "the", "are", "oro", "loll", "roll", "troll", "ill",
-    "got", "tools",
+    "had", "has", "have", "he", "hello", "her", "here", "him", "his", "how", "i", "if", "in", "is",
+    "it", "its", "me", "my", "no", "not", "now", "of", "on", "or", "our", "out", "she", "so",
+    "that", "the", "their", "them", "there", "they", "this", "to", "up", "us", "was", "we", "what",
+    "when", "who", "will", "with", "world", "you", "your", "hacker", "scan", "tool", "code",
+    "script", "test", "file", "run", "all", "one", "two", "see", "go", "let", "lol", "elite",
+    "leet", "own", "pwn", "the", "are", "oro", "loll", "roll", "troll", "ill", "got", "tools",
 ];
 
 /// Generate every plausible plain-text decoding of a leet token (cartesian
