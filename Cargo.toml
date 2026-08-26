@@ -1,0 +1,26 @@
+[package]
+name = "codex-cyber-fixer"
+version = "0.1.0"
+edition = "2021"
+description = "Clear the Codex cybersecurity Trusted-Access refusal from a session so `codex resume` keeps working. Fixes the SQLite thread-history store (source of truth) and optionally sanitizes the rollout .jsonl."
+license = "MIT"
+
+[[bin]]
+name = "codex-cyber-fixer"
+path = "src/main.rs"
+
+[dependencies]
+# Bundled SQLite: compiles the amalgamation in, no system libsqlite3 needed.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# preserve_order keeps JSON object key order on re-serialized lines (clean diffs).
+serde_json = { version = "1", features = ["preserve_order"] }
+walkdir = "2"
+glob = "0.3"
+
+# Small, fast release binary (the whole point of moving off the ~98MB Bun build).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
