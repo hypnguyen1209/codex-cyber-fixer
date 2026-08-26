@@ -224,8 +224,8 @@ fn compute_turn_drop_set(entries: &[ParsedLine], stats: &mut CleanStats) -> Hash
             start = i; // provisional: pull benign in-between lines into the turn
         }
 
-        for i in start..=end {
-            if !entries[i].blank && !drop.contains(&i) {
+        for (i, entry) in entries.iter().enumerate().take(end + 1).skip(start) {
+            if !entry.blank && !drop.contains(&i) {
                 drop.insert(i);
                 stats.turn_lines_dropped += 1;
             }
@@ -252,15 +252,31 @@ pub fn clean_rollout(input: &str, mode: CleanMode) -> CleanResult {
         .iter()
         .map(|&raw| {
             if raw.trim().is_empty() {
-                return ParsedLine { raw: raw.to_string(), blank: true, obj: None };
+                return ParsedLine {
+                    raw: raw.to_string(),
+                    blank: true,
+                    obj: None,
+                };
             }
             stats.total_lines += 1;
             match serde_json::from_str::<Value>(raw) {
-                Ok(v) if v.is_object() => ParsedLine { raw: raw.to_string(), blank: false, obj: Some(v) },
-                Ok(_) => ParsedLine { raw: raw.to_string(), blank: false, obj: None },
+                Ok(v) if v.is_object() => ParsedLine {
+                    raw: raw.to_string(),
+                    blank: false,
+                    obj: Some(v),
+                },
+                Ok(_) => ParsedLine {
+                    raw: raw.to_string(),
+                    blank: false,
+                    obj: None,
+                },
                 Err(_) => {
                     stats.parse_errors += 1;
-                    ParsedLine { raw: raw.to_string(), blank: false, obj: None }
+                    ParsedLine {
+                        raw: raw.to_string(),
+                        blank: false,
+                        obj: None,
+                    }
                 }
             }
         })
@@ -374,17 +390,29 @@ mod tests {
         json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"T0","last_agent_message":"hi","error":null}}).to_string()
     }
     fn blocked_turn() -> Vec<String> {
-        vec![task_started(), turn_ctx(), user_msg(), item_done(), tokens(), cyber_complete()]
+        vec![
+            task_started(),
+            turn_ctx(),
+            user_msg(),
+            item_done(),
+            tokens(),
+            cyber_complete(),
+        ]
     }
     fn parse_lines(s: &str) -> Vec<Value> {
-        s.split('\n').filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).unwrap()).collect()
+        s.split('\n')
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
     }
 
     #[test]
     fn refusal_text_matches_known_wordings() {
         assert!(is_refusal_str("This content can't be shown"));
         assert!(is_refusal_str("This content can\u{2019}t be shown")); // curly apostrophe
-        assert!(is_refusal_str("We take extra caution with cybersecurity requests"));
+        assert!(is_refusal_str(
+            "We take extra caution with cybersecurity requests"
+        ));
         assert!(is_refusal_str("flagged for possible cybersecurity risk"));
         assert!(is_refusal_str("Trusted Access for Cyber program"));
     }
@@ -406,9 +434,17 @@ mod tests {
         assert!(r.stats.changed);
         let out = parse_lines(&r.output);
         assert_eq!(out.len(), 7);
-        let complete = out.iter().find(|e| str_at(e, &["payload", "type"]) == Some("task_complete") && str_at(e, &["payload", "turn_id"]) == Some("T1")).unwrap();
+        let complete = out
+            .iter()
+            .find(|e| {
+                str_at(e, &["payload", "type"]) == Some("task_complete")
+                    && str_at(e, &["payload", "turn_id"]) == Some("T1")
+            })
+            .unwrap();
         assert!(complete["payload"]["error"].is_null());
-        assert!(out.iter().any(|e| str_at(e, &["payload", "role"]) == Some("user")));
+        assert!(out
+            .iter()
+            .any(|e| str_at(e, &["payload", "role"]) == Some("user")));
     }
 
     #[test]
@@ -428,8 +464,12 @@ mod tests {
         assert_eq!(r.stats.events_dropped, 1);
         let out = parse_lines(&r.output);
         assert_eq!(out.len(), 5);
-        assert!(!out.iter().any(|e| str_at(e, &["payload", "type"]) == Some("task_complete")));
-        assert!(out.iter().any(|e| str_at(e, &["payload", "role"]) == Some("user")));
+        assert!(!out
+            .iter()
+            .any(|e| str_at(e, &["payload", "type"]) == Some("task_complete")));
+        assert!(out
+            .iter()
+            .any(|e| str_at(e, &["payload", "role"]) == Some("user")));
     }
 
     #[test]
@@ -444,14 +484,24 @@ mod tests {
         let out = parse_lines(&r.output);
         assert_eq!(out.len(), 2);
         assert_eq!(str_at(&out[0], &["payload", "turn_id"]), Some("T0"));
-        assert_eq!(str_at(&out[1], &["payload", "type"]), Some("thread_settings_applied"));
-        assert!(!out.iter().any(|e| str_at(e, &["payload", "turn_id"]) == Some("T1")));
-        assert!(!out.iter().any(|e| str_at(e, &["payload", "role"]) == Some("user")));
+        assert_eq!(
+            str_at(&out[1], &["payload", "type"]),
+            Some("thread_settings_applied")
+        );
+        assert!(!out
+            .iter()
+            .any(|e| str_at(e, &["payload", "turn_id"]) == Some("T1")));
+        assert!(!out
+            .iter()
+            .any(|e| str_at(e, &["payload", "role"]) == Some("user")));
     }
 
     #[test]
     fn drop_turn_handles_two_consecutive() {
-        let turn2: Vec<String> = blocked_turn().iter().map(|l| l.replace("T1", "T2")).collect();
+        let turn2: Vec<String> = blocked_turn()
+            .iter()
+            .map(|l| l.replace("T1", "T2"))
+            .collect();
         let mut all = blocked_turn();
         all.push(thread_settings());
         all.extend(turn2);
@@ -460,7 +510,10 @@ mod tests {
         assert_eq!(r.stats.turns_dropped, 2);
         let out = parse_lines(&r.output);
         assert_eq!(out.len(), 1);
-        assert_eq!(str_at(&out[0], &["payload", "type"]), Some("thread_settings_applied"));
+        assert_eq!(
+            str_at(&out[0], &["payload", "type"]),
+            Some("thread_settings_applied")
+        );
     }
 
     #[test]
