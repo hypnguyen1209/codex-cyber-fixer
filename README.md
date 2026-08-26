@@ -5,8 +5,9 @@ Clear the cybersecurity **Trusted Access** refusal from a Codex session so
 
 ```
 This content can't be shown
-  We take extra caution with cybersecurity requests. If you're a security
-  professional, you may be able to apply for Trusted Access.
+  We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.
+  Trusted Access: https://openai.com/form/enterprise-trusted-access-for-cyber/
+  Learn more: https://help.openai.com/en/articles/20001326
 ```
 
 A small single-binary CLI in **[Rust](https://www.rust-lang.org)** (~1.3 MB). It
