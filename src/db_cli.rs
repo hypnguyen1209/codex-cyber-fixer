@@ -6,11 +6,11 @@
 //! and caches the timeline, so a write while it runs may be lost or conflict.
 //! (--dry-run is read-only and safe to run anytime.)
 
-use crate::rollout_cli::{clean_rollout_in_place, InPlaceOpts};
 use crate::db::{
     clean_thread_history_db, find_thread_history_dbs, list_cyber_turns, sqlite_home, thread_exists,
     CyberTurn, DbMode,
 };
+use crate::rollout_cli::{clean_rollout_in_place, InPlaceOpts};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
@@ -61,8 +61,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-m" | "--mode" => {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or("");
-                a.mode = DbMode::parse(v)
-                    .ok_or_else(|| format!("invalid --mode \"{v}\" (use neutralize | drop-turn)"))?;
+                a.mode = DbMode::parse(v).ok_or_else(|| {
+                    format!("invalid --mode \"{v}\" (use neutralize | drop-turn)")
+                })?;
             }
             _ => {
                 if arg.starts_with('-') {
@@ -126,7 +127,9 @@ fn short_err(json: &Option<String>) -> String {
 fn open_ro(path: &Path) -> rusqlite::Result<Connection> {
     Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
 }
 
@@ -239,7 +242,11 @@ pub fn run_db_cli(argv: &[String]) -> i32 {
 
     println!(
         "\n{total_turns} cyber-refusal turn(s) {}.",
-        if args.dry_run { "found (dry-run, nothing written)" } else { "handled" }
+        if args.dry_run {
+            "found (dry-run, nothing written)"
+        } else {
+            "handled"
+        }
     );
 
     // --full: also tidy the matching rollout .jsonl (cosmetic — resume already
@@ -251,14 +258,23 @@ pub fn run_db_cli(argv: &[String]) -> i32 {
             println!("\n· also cleaning rollout .jsonl (cosmetic; does not affect resume):");
             let r = clean_rollout_in_place(
                 &args.ids,
-                &InPlaceOpts { mode: args.mode.to_clean(), quiet: false, dry_run: args.dry_run, no_backup: false },
+                &InPlaceOpts {
+                    mode: args.mode.to_clean(),
+                    quiet: false,
+                    dry_run: args.dry_run,
+                    no_backup: false,
+                },
             );
             failures += r.failures;
             println!(
                 "  {} rollout file(s), {} cleaned{}.",
                 r.scanned,
                 r.changed,
-                if args.dry_run { " (dry-run, nothing written)" } else { "" }
+                if args.dry_run {
+                    " (dry-run, nothing written)"
+                } else {
+                    ""
+                }
             );
         }
     }
