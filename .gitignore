@@ -1,0 +1,7 @@
+# Rust
+/target/
+
+# tool output
+*.bak
+*.cleaned.jsonl
+*.cyber-backup.*.json
