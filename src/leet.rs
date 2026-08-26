@@ -47,9 +47,7 @@ pub fn encode(input: &str) -> String {
     out
 }
 
-/// Reverse lookup for a single leet symbol. Ambiguous by design — `1` can be
-/// I, L or R — so decoding works word-by-word and picks the candidate that
-/// forms a real word (see [`decode_word`]).
+#[allow(dead_code)]
 fn decode_symbol(c: char) -> &'static [&'static str] {
     match c {
         '4' | '@' => &["a"],
@@ -71,6 +69,7 @@ fn decode_symbol(c: char) -> &'static [&'static str] {
 /// real interpretation when a leet token has several decodings. Lowercase.
 /// This is intentionally modest — it only needs to break ties toward the
 /// reading a human would pick, not to be a full dictionary.
+#[allow(dead_code)]
 const COMMON_WORDS: &[&str] = &[
     "a", "am", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "for", "from",
     "had", "has", "have", "he", "hello", "her", "here", "him", "his", "how", "i", "if", "in", "is",
@@ -85,6 +84,7 @@ const COMMON_WORDS: &[&str] = &[
 /// product of per-symbol candidates), most-likely first. Letters and unknown
 /// symbols map to themselves. Capped to avoid combinatorial blowup on long
 /// tokens — past the cap we stop branching and take the first candidate.
+#[allow(dead_code)]
 fn decode_candidates(word: &str) -> Vec<String> {
     const MAX_BRANCH: usize = 256;
     let mut acc: Vec<String> = vec![String::new()];
@@ -124,6 +124,7 @@ fn decode_candidates(word: &str) -> Vec<String> {
 /// Decode one leet token to its most likely plain word. If any candidate is a
 /// common real word, return the first (most common) one; otherwise fall back
 /// to the first candidate (the deterministic primary reading).
+#[allow(dead_code)]
 fn decode_word(word: &str) -> String {
     if word.chars().all(|c| c.is_ascii_digit()) {
         if word.len() > 1 {
@@ -150,6 +151,7 @@ fn decode_word(word: &str) -> String {
 /// Decode leet speak back to plain readable text. Splits on whitespace and
 /// punctuation (which are preserved), decodes each token, and prefers common
 /// real words when a token is ambiguous.
+#[allow(dead_code)]
 pub fn decode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut cur = String::new();
