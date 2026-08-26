@@ -103,7 +103,10 @@ fn is_thread_history_name(name: &str) -> bool {
 /// Locate thread-history DB files. `explicit_db` is used verbatim; otherwise
 /// search `sqlite_home` at its root, then recursively as a fallback. Newest
 /// (highest version suffix) first.
-pub fn find_thread_history_dbs(sqlite_home_override: Option<&str>, explicit_db: Option<&str>) -> Vec<PathBuf> {
+pub fn find_thread_history_dbs(
+    sqlite_home_override: Option<&str>,
+    explicit_db: Option<&str>,
+) -> Vec<PathBuf> {
     if let Some(db) = explicit_db {
         if !db.is_empty() {
             return vec![PathBuf::from(db)];
@@ -127,7 +130,11 @@ pub fn find_thread_history_dbs(sqlite_home_override: Option<&str>, explicit_db: 
         }
     }
     // Prefer higher version numbers (thread_history_2 over _1): reverse order.
-    found.sort_by(|a, b| b.to_string_lossy().to_lowercase().cmp(&a.to_string_lossy().to_lowercase()));
+    found.sort_by(|a, b| {
+        b.to_string_lossy()
+            .to_lowercase()
+            .cmp(&a.to_string_lossy().to_lowercase())
+    });
     found
 }
 
@@ -150,7 +157,10 @@ fn row_to_turn(row: &rusqlite::Row) -> rusqlite::Result<CyberTurn> {
 }
 
 /// List the cyber-refusal turns for a thread (or every thread if `thread_id` is None).
-pub fn list_cyber_turns(conn: &Connection, thread_id: Option<&str>) -> rusqlite::Result<Vec<CyberTurn>> {
+pub fn list_cyber_turns(
+    conn: &Connection,
+    thread_id: Option<&str>,
+) -> rusqlite::Result<Vec<CyberTurn>> {
     let where_clause = if thread_id.is_some() {
         format!("thread_id = ? AND {CYBER_WHERE}")
     } else {
@@ -161,8 +171,12 @@ pub fn list_cyber_turns(conn: &Connection, thread_id: Option<&str>) -> rusqlite:
     );
     let mut stmt = conn.prepare(&sql)?;
     let turns = match thread_id {
-        Some(tid) => stmt.query_map([tid], row_to_turn)?.collect::<rusqlite::Result<Vec<_>>>()?,
-        None => stmt.query_map([], row_to_turn)?.collect::<rusqlite::Result<Vec<_>>>()?,
+        Some(tid) => stmt
+            .query_map([tid], row_to_turn)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+        None => stmt
+            .query_map([], row_to_turn)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
     };
     Ok(turns)
 }
@@ -184,7 +198,11 @@ fn value_ref_to_json(v: ValueRef) -> Value {
 
 /// Read rows of an arbitrary SELECT into JSON objects keyed by column name
 /// (mirrors `SELECT *` for the backup).
-fn rows_to_json(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> rusqlite::Result<Vec<Value>> {
+fn rows_to_json(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(sql)?;
     let cols: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
     let mut rows = stmt.query(params)?;
@@ -241,7 +259,12 @@ pub fn clean_thread_history_db(
 
     let turns = list_cyber_turns(&conn, thread_id)?;
     if turns.is_empty() || dry_run {
-        return Ok(DbCleanResult { db_path: db_path.to_path_buf(), turns, items_affected: 0, applied: false });
+        return Ok(DbCleanResult {
+            db_path: db_path.to_path_buf(),
+            turns,
+            items_affected: 0,
+            applied: false,
+        });
     }
 
     // Backup the exact rows we are about to change (turns + their items for
@@ -261,7 +284,10 @@ pub fn clean_thread_history_db(
         }
     }
     let backup_path = backup_path_for(db_path, thread_id);
-    std::fs::write(&backup_path, serde_json::to_string_pretty(&Value::Object(backup))?)?;
+    std::fs::write(
+        &backup_path,
+        serde_json::to_string_pretty(&Value::Object(backup))?,
+    )?;
 
     let mut items_affected = 0usize;
     {
@@ -293,7 +319,12 @@ pub fn clean_thread_history_db(
     // discards the -wal. Best-effort.
     let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
 
-    Ok(DbCleanResult { db_path: db_path.to_path_buf(), turns, items_affected, applied: true })
+    Ok(DbCleanResult {
+        db_path: db_path.to_path_buf(),
+        turns,
+        items_affected,
+        applied: true,
+    })
 }
 
 #[cfg(test)]
@@ -308,7 +339,11 @@ mod tests {
 
     fn unique_db_path() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("codex-cyber-db-test-{}-{}.sqlite", std::process::id(), n))
+        std::env::temp_dir().join(format!(
+            "codex-cyber-db-test-{}-{}.sqlite",
+            std::process::id(),
+            n
+        ))
     }
 
     fn seed(path: &Path) {
@@ -350,7 +385,11 @@ mod tests {
         let path = unique_db_path();
         seed(&path);
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let mut ids: Vec<String> = list_cyber_turns(&conn, Some(TID)).unwrap().into_iter().map(|t| t.turn_id).collect();
+        let mut ids: Vec<String> = list_cyber_turns(&conn, Some(TID))
+            .unwrap()
+            .into_iter()
+            .map(|t| t.turn_id)
+            .collect();
         ids.sort();
         drop(conn);
         cleanup(&path);
@@ -366,15 +405,45 @@ mod tests {
         assert_eq!(res.turns.len(), 2);
 
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let status: String = conn.query_row("SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'", [TID], |r| r.get(0)).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(status, "completed");
-        let err: Option<String> = conn.query_row("SELECT error_json FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'", [TID], |r| r.get(0)).unwrap();
+        let err: Option<String> = conn
+            .query_row(
+                "SELECT error_json FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(err.is_none());
-        let io_status: String = conn.query_row("SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-io'", [TID], |r| r.get(0)).unwrap();
+        let io_status: String = conn
+            .query_row(
+                "SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-io'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(io_status, "failed");
-        let items: i64 = conn.query_row("SELECT count(*) FROM thread_items WHERE thread_id=?", [TID], |r| r.get(0)).unwrap();
+        let items: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM thread_items WHERE thread_id=?",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(items, 2);
-        let b_status: String = conn.query_row("SELECT status FROM thread_turns WHERE thread_id='thread-B'", [], |r| r.get(0)).unwrap();
+        let b_status: String = conn
+            .query_row(
+                "SELECT status FROM thread_turns WHERE thread_id='thread-B'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(b_status, "failed");
         drop(conn);
         cleanup(&path);
@@ -390,12 +459,24 @@ mod tests {
 
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         let mut ids: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT turn_id FROM thread_turns WHERE thread_id=?").unwrap();
-            let v = stmt.query_map([TID], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT turn_id FROM thread_turns WHERE thread_id=?")
+                .unwrap();
+            let v = stmt
+                .query_map([TID], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
             v
         };
         ids.sort();
-        let items: i64 = conn.query_row("SELECT count(*) FROM thread_items WHERE thread_id=?", [TID], |r| r.get(0)).unwrap();
+        let items: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM thread_items WHERE thread_id=?",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
         drop(conn);
         cleanup(&path);
         assert_eq!(ids, vec!["t-io", "t-ok"]);
@@ -410,7 +491,12 @@ mod tests {
         let backup = backup_path_for(&path, Some(TID));
         let content = std::fs::read_to_string(&backup).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
-        let mut ids: Vec<String> = parsed["turns"].as_array().unwrap().iter().map(|t| t["turn_id"].as_str().unwrap().to_string()).collect();
+        let mut ids: Vec<String> = parsed["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["turn_id"].as_str().unwrap().to_string())
+            .collect();
         ids.sort();
         assert_eq!(ids, vec!["t-cyber1", "t-cyber2"]);
         assert_eq!(parsed["items:t-cyber1"].as_array().unwrap().len(), 1);
@@ -424,7 +510,13 @@ mod tests {
         let res = clean_thread_history_db(&path, DbMode::Neutralize, Some(TID), true).unwrap();
         assert!(!res.applied);
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let failed: i64 = conn.query_row("SELECT count(*) FROM thread_turns WHERE status='failed'", [], |r| r.get(0)).unwrap();
+        let failed: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM thread_turns WHERE status='failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         drop(conn);
         cleanup(&path);
         assert_eq!(failed, 4);
