@@ -1,8 +1,8 @@
 name: build
 
-# SQLite is compiled from source (rusqlite "bundled"), so each target is built
-# on its native runner rather than cross-compiled from one host. Artifacts are
-# uploaded per run; on a `v*` tag they are also attached to the GitHub Release.
+# Normal pushes / PRs run a fast CI check on one OS. The full per-OS matrix
+# (which builds the bundled SQLite from source) and the GitHub Release upload
+# only run on a `v*` tag.
 
 on:
   push:
@@ -12,7 +12,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  # Fast CI: test + release build on a single runner. Skipped on tags.
+  check:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+      - run: cargo build --release
+
+  # Release: build every target on its native runner, attach to the Release.
+  # Only runs on a `v*` tag.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +88,6 @@ jobs:
           path: dist/${{ matrix.name }}
 
       - name: Attach binary to release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.name }}
