@@ -1,7 +1,8 @@
 # codex-cyber-fixer
 
-Clear the cybersecurity **Trusted Access** refusal from a Codex session so
-`codex resume` keeps working instead of getting stuck on:
+Clear hard-block policy refusals — **cybersecurity Trusted Access** and
+**misalignment policy violation** — from a Codex session so `codex resume`
+keeps working instead of getting stuck on:
 
 ```
 This content can't be shown
@@ -14,12 +15,13 @@ A small single-binary CLI in **[Rust](https://www.rust-lang.org)** (~1.3 MB). It
 only edits local Codex state — nothing is sent anywhere.
 
 > **Scope.** This is a cleanup utility for *false-positive over-refusals* on
-> authorized security work. It removes a refusal marker already stored on your
-> own disk. It does **not** bypass the live server-side moderation (a risky
-> prompt is re-flagged from scratch on every send), cannot recover content the
-> backend refused (that turn was generated with no model output), and does not
-> help you attack or scan systems you aren't authorized to test. It makes a
-> *stuck resume* usable again — that's the whole job.
+> authorized work (security research, alignment research, red-teaming). It
+> removes a refusal marker already stored on your own disk. It does **not**
+> bypass the live server-side moderation (a risky prompt is re-flagged from
+> scratch on every send), cannot recover content the backend refused (that
+> turn was generated with no model output), and does not help you attack or
+> scan systems you aren't authorized to test. It makes a *stuck resume* usable
+> again — that's the whole job.
 
 ## The one thing to understand
 
@@ -152,7 +154,7 @@ db (default):
 
 rollout (cosmetic — exported logs only, does NOT affect resume):
   codex-cyber-fixer rollout <session-id | file | glob> [options]
-  -m, --mode <m>        neutralize | drop-event | drop-turn
+  -m, --mode <m>        neutralize | drop-event | drop-turn | leet
       --no-backup       overwrite without a .bak
   -c, --copy            write *.cleaned.jsonl instead of overwriting
   -o, --out <path>      write result to <path>
@@ -163,8 +165,9 @@ rollout (cosmetic — exported logs only, does NOT affect resume):
 
 The `leet` mode goes a step beyond `neutralize`: it also rewrites the user
 message text into **leet speak** (l33t), substituting letters with visually
-similar numbers so a re-scan of the thread no longer matches the cyber
-signature.
+similar numbers so a re-scan of the thread no longer matches the policy
+signature (cyber or misalignment). Applied in both the DB (source of truth)
+and the rollout `.jsonl` when using `--full`.
 
 ```
 Original:  hello world, I am a hacker
