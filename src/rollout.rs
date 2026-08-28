@@ -67,18 +67,26 @@ pub struct CleanResult {
     pub stats: CleanStats,
 }
 
-/// Text signatures of the cybersecurity refusal, in any wording Codex / the
-/// backend have used. Compared against the input lowercased, with apostrophes
-/// normalized — so these literals are all lowercase with a straight quote.
-const REFUSAL_PATTERNS: [&str; 5] = [
+/// Text signatures of hard-block policy refusals (cyber + misalignment), in any
+/// wording Codex / the backend have used. Compared against the input lowercased,
+/// with apostrophes normalized — so these literals are all lowercase with a
+/// straight quote.
+const REFUSAL_PATTERNS: [&str; 8] = [
+    // CyberPolicy
     "this content can't be shown",
     "extra caution with cybersecurity",
     "flagged for possible cybersecurity",
     "trusted access for cyber",
     "enterprise-trusted-access-for-cyber",
+    // MisalignmentPolicyViolation
+    "misalignment policy",
+    "violated the misalignment policy",
+    "blocked due to a misalignment policy",
 ];
 
-const CYBER_ERROR_INFO: &str = "cyber_policy";
+/// codex_error_info values that mark a hard-block policy turn. Both stop the
+/// session the same way and are cleared the same way.
+const BLOCK_ERROR_INFOS: [&str; 2] = ["cyber_policy", "misalignment_policy_violation"];
 
 fn normalize_apostrophes(s: &str) -> String {
     s.chars()
@@ -125,8 +133,10 @@ fn is_cyber_error(error: &Value) -> bool {
     if !error.is_object() {
         return false;
     }
-    if error.get("codex_error_info").and_then(Value::as_str) == Some(CYBER_ERROR_INFO) {
-        return true;
+    if let Some(info) = error.get("codex_error_info").and_then(Value::as_str) {
+        if BLOCK_ERROR_INFOS.contains(&info) {
+            return true;
+        }
     }
     error.get("message").is_some_and(is_refusal_value)
 }
@@ -509,6 +519,34 @@ mod tests {
         ));
         assert!(is_refusal_str("flagged for possible cybersecurity risk"));
         assert!(is_refusal_str("Trusted Access for Cyber program"));
+        // MisalignmentPolicyViolation wordings.
+        assert!(is_refusal_str(
+            "This request violated the misalignment policy."
+        ));
+        assert!(is_refusal_str(
+            "This request was blocked due to a misalignment policy violation."
+        ));
+    }
+
+    #[test]
+    fn misalignment_task_complete_is_neutralized() {
+        let misalign_complete = json!({
+            "type":"event_msg",
+            "payload":{
+                "type":"task_complete",
+                "turn_id":"T1",
+                "last_agent_message":null,
+                "error":{
+                    "message":"This request violated the misalignment policy.",
+                    "codex_error_info":"misalignment_policy_violation"
+                }
+            }
+        })
+        .to_string();
+        let r = clean_rollout(&misalign_complete, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+        let out = parse_lines(&r.output);
+        assert!(out[0]["payload"]["error"].is_null());
     }
 
     #[test]

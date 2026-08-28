@@ -77,7 +77,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-const HELP: &str = r#"codex-cyber-fixer db — strip the cybersecurity refusal from Codex's resume store
+const HELP: &str = r#"codex-cyber-fixer db — strip hard-block policy refusals from Codex's resume store
+
+Handles both CyberPolicy and MisalignmentPolicyViolation (same failure shape).
 
 Usage:
   codex-cyber-fixer [db] [options] <session-id> ...   (db is the default subcommand)
@@ -93,13 +95,13 @@ stores its thread-history there, NOT in ~/.codex. Point the tool at it with
 
 Options:
   -m, --mode <m>       neutralize | drop-turn | leet    (default: neutralize)
-                         neutralize  mark the blocked turn completed, clear error
+                         neutralize  mark the blocked turn interrupted, clear error
                                      (keeps the user message; block disappears)
                          drop-turn   delete the whole blocked turn and its items
                                      (removes the flagged user message too)
                          leet        neutralize the block AND rewrite the turn's
                                      user messages into leet speak so a re-scan
-                                     no longer matches the cyber signature
+                                     no longer matches the policy signature
   -s, --sqlite-home <d> directory holding thread_history_*.sqlite (a session's
                         sqlite_home). Also via CODEX_SQLITE_HOME / CODEX_HOME.
       --db <file>      operate on this exact thread_history_*.sqlite file

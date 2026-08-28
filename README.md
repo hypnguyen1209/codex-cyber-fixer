@@ -34,15 +34,21 @@ database, not from the rollout `.jsonl` log.**
 So editing the `.jsonl` does **not** unblock a session (and it desyncs byte
 offsets the DB records). You must fix the **DB** — the default `db` subcommand.
 
-In the DB, the blocked turn is a `thread_turns` row with `status='failed'` and an
-`error_json` marked `cyberPolicy`. (The "This content can't be shown" text is
-never stored — it's just how the TUI renders that row.) Two ways to fix it:
+In the DB, a hard-blocked turn is a `thread_turns` row with `status='failed'`
+and an `error_json` whose `codexErrorInfo` is `cyberPolicy` **or**
+`misalignmentPolicyViolation` — both stop resume the same way and are cleared
+the same way. (The "This content can't be shown" text is never stored — it's
+just how the TUI renders that row.) Three ways to fix it:
 
 | `--mode` | Effect on the blocked turn | Keeps user msg? |
 |----------|----------------------------|:---------------:|
-| `neutralize` *(default)* | `status → completed`, `error_json → NULL` | ✅ (original text) |
+| `neutralize` *(default)* | `status → interrupted`, `error_json → NULL` | ✅ (original text) |
 | `drop-turn` | delete the turn row **and** its `thread_items` | ❌ |
 | `leet` | neutralize **+** rewrite user message text into leet speak | ✅ (obfuscated) |
+
+Neutralize/leet flip the failed turn to `interrupted` — a legitimate `TurnStatus`
+meaning "the user aborted this turn" — rather than `completed`, which would
+falsely claim the model produced output.
 
 `neutralize` is enough to unblock. Use `drop-turn` to also make the turn vanish
 from the timeline. Use `leet` to unblock **and** obfuscate the user message so a

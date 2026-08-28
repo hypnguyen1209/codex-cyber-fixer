@@ -1,11 +1,16 @@
 //! Thread-history store cleaner.
 //!
 //! On current Codex builds the TUI reconstructs a resumed session from the
-//! SQLite thread-history database, NOT from the rollout .jsonl log. The
-//! cybersecurity refusal is stored there as a row in `thread_turns` with
+//! SQLite thread-history database, NOT from the rollout .jsonl log. Hard-block
+//! policy refusals are stored there as a `thread_turns` row with
 //! `status = "failed"` and an `error_json` whose `codexErrorInfo` is
-//! `"cyberPolicy"`. Editing the .jsonl has no effect on resume (and desyncs the
-//! byte offsets the DB records). This module fixes the actual store.
+//! `"cyberPolicy"` or `"misalignmentPolicyViolation"` — both are cleared the
+//! same way. Editing the .jsonl has no effect on resume (and desyncs the byte
+//! offsets the DB records). This module fixes the actual store.
+//!
+//! Neutralize/leet flip the failed status to `"interrupted"` (a legitimate
+//! TurnStatus meaning "the user aborted this turn") rather than `"completed"`,
+//! which would falsely claim the model produced output.
 //!
 //! A "turn" owns its rows in `thread_items` (same thread_id + turn_id), which
 //! includes the triggering user message.
@@ -145,13 +150,18 @@ pub fn find_thread_history_dbs(
     found
 }
 
-/// SQL predicate identifying a cyber-refusal turn. Matches both the machine
-/// marker and the human wording, to be resilient across builds.
+/// SQL predicate identifying a policy-blocked turn. Covers both hard-block
+/// policies Codex enforces the same way (status='failed' + typed error_json):
+/// CyberPolicy and MisalignmentPolicyViolation. Matches both the machine marker
+/// and the human wording, to be resilient across builds.
 const CYBER_WHERE: &str = "status = 'failed' AND error_json IS NOT NULL AND (\
 error_json LIKE '%cyberPolicy%' OR \
 error_json LIKE '%cyber_policy%' OR \
 error_json LIKE '%flagged for possible cybersecurity%' OR \
-error_json LIKE '%Trusted Access for Cyber%')";
+error_json LIKE '%Trusted Access for Cyber%' OR \
+error_json LIKE '%misalignmentPolicyViolation%' OR \
+error_json LIKE '%misalignment_policy_violation%' OR \
+error_json LIKE '%misalignment policy%')";
 
 fn row_to_turn(row: &rusqlite::Row) -> rusqlite::Result<CyberTurn> {
     Ok(CyberTurn {
@@ -342,13 +352,13 @@ pub fn clean_thread_history_db(
                 }
                 DbMode::Neutralize => {
                     tx.execute(
-                        "UPDATE thread_turns SET status = 'completed', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
+                        "UPDATE thread_turns SET status = 'interrupted', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
                         rusqlite::params![t.thread_id, t.turn_id],
                     )?;
                 }
                 DbMode::Leet => {
                     tx.execute(
-                        "UPDATE thread_turns SET status = 'completed', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
+                        "UPDATE thread_turns SET status = 'interrupted', error_json = NULL WHERE thread_id = ? AND turn_id = ?",
                         rusqlite::params![t.thread_id, t.turn_id],
                     )?;
                     let mut stmt = tx.prepare(
@@ -395,6 +405,7 @@ mod tests {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     const TID: &str = "thread-A";
     const CYBER_ERR: &str = r#"{"message":"This content was flagged for possible cybersecurity risk.","codexErrorInfo":"cyberPolicy","additionalDetails":null}"#;
+    const MISALIGN_ERR: &str = r#"{"message":"This request violated the misalignment policy.","codexErrorInfo":"misalignmentPolicyViolation","additionalDetails":null}"#;
     const OTHER_ERR: &str = r#"{"message":"network timeout","codexErrorInfo":"io"}"#;
 
     fn unique_db_path() -> PathBuf {
@@ -472,7 +483,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(status, "completed");
+        assert_eq!(status, "interrupted");
         let err: Option<String> = conn
             .query_row(
                 "SELECT error_json FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
@@ -618,7 +629,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(status, "completed");
+        assert_eq!(status, "interrupted");
         let err: Option<String> = conn
             .query_row(
                 "SELECT error_json FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
@@ -641,5 +652,48 @@ mod tests {
         );
         drop(conn);
         cleanup(&path);
+    }
+
+    fn seed_misalign(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE thread_turns (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, error_json TEXT, PRIMARY KEY (thread_id, turn_id));\
+             CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, item_json TEXT NOT NULL, PRIMARY KEY (thread_id, turn_id, item_id));",
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
+            rusqlite::params![TID, "t-mis", 1, "failed", MISALIGN_ERR],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_cyber_turns_also_picks_up_misalignment() {
+        let path = unique_db_path();
+        seed_misalign(&path);
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let turns = list_cyber_turns(&conn, Some(TID)).unwrap();
+        drop(conn);
+        cleanup(&path);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].turn_id, "t-mis");
+    }
+
+    #[test]
+    fn neutralize_writes_interrupted_not_completed() {
+        let path = unique_db_path();
+        seed(&path);
+        clean_thread_history_db(&path, DbMode::Neutralize, Some(TID), false).unwrap();
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM thread_turns WHERE thread_id=? AND turn_id='t-cyber1'",
+                [TID],
+                |r| r.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        cleanup(&path);
+        assert_eq!(status, "interrupted");
     }
 }
