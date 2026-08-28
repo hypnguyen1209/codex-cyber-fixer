@@ -49,9 +49,7 @@ impl DbMode {
         match self {
             DbMode::Neutralize => CleanMode::Neutralize,
             DbMode::DropTurn => CleanMode::DropTurn,
-            // The rollout cleaner has no leet mode; neutralize is the
-            // equivalent cosmetic fix for the exported log.
-            DbMode::Leet => CleanMode::Neutralize,
+            DbMode::Leet => CleanMode::Leet,
         }
     }
 }

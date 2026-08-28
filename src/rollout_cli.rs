@@ -55,7 +55,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or("");
                 a.mode = CleanMode::parse(v).ok_or_else(|| {
-                    format!("invalid --mode \"{v}\" (use neutralize | drop-event | drop-turn)")
+                    format!(
+                        "invalid --mode \"{v}\" (use neutralize | drop-event | drop-turn | leet)"
+                    )
                 })?;
             }
             _ => {
@@ -84,10 +86,11 @@ SESSION ID and resolved under the Codex sessions directory:
 By default the input is OVERWRITTEN in place (a .bak backup is written first).
 
 Options:
-  -m, --mode <m>   neutralize | drop-event | drop-turn   (default: neutralize)
+  -m, --mode <m>   neutralize | drop-event | drop-turn | leet  (default: neutralize)
                      neutralize  keep the turn, strip only the cyber error
                      drop-event  remove only the refusal task_complete line
                      drop-turn   remove the whole blocked turn (incl. user msg)
+                     leet        neutralize + rewrite user msg text into leet speak
       --no-backup  overwrite without writing a .bak backup
   -c, --copy       don't overwrite; write "<input>.cleaned.jsonl" instead
   -o, --out <path> write result to <path> (single input; no overwrite)
@@ -214,6 +217,9 @@ fn summarize(s: &CleanStats) -> String {
     }
     if s.messages_dropped > 0 {
         parts.push(format!("{} message(s) dropped", s.messages_dropped));
+    }
+    if s.texts_leet_encoded > 0 {
+        parts.push(format!("{} text(s) leet-encoded", s.texts_leet_encoded));
     }
     if s.parse_errors > 0 {
         parts.push(format!("{} unparseable line(s) left as-is", s.parse_errors));
