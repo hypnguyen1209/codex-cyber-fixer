@@ -150,18 +150,25 @@ pub fn find_thread_history_dbs(
     found
 }
 
-/// SQL predicate identifying a policy-blocked turn. Covers both hard-block
+/// SQL predicate identifying a policy-blocked turn. Covers the three hard-block
 /// policies Codex enforces the same way (status='failed' + typed error_json):
-/// CyberPolicy and MisalignmentPolicyViolation. Matches both the machine marker
-/// and the human wording, to be resilient across builds.
+/// CyberPolicy, MisalignmentPolicyViolation, and BioPolicy (which rides
+/// codex_error_info=badRequest but is detected by message prefix — same UX,
+/// composer locked). Matches both machine markers and human wording, resilient
+/// across Codex builds. Apostrophes in literals are doubled per SQL syntax.
 const CYBER_WHERE: &str = "status = 'failed' AND error_json IS NOT NULL AND (\
 error_json LIKE '%cyberPolicy%' OR \
 error_json LIKE '%cyber_policy%' OR \
 error_json LIKE '%flagged for possible cybersecurity%' OR \
+error_json LIKE '%flagged for cyber policy%' OR \
 error_json LIKE '%Trusted Access for Cyber%' OR \
 error_json LIKE '%misalignmentPolicyViolation%' OR \
 error_json LIKE '%misalignment_policy_violation%' OR \
-error_json LIKE '%misalignment policy%')";
+error_json LIKE '%misalignment policy%' OR \
+error_json LIKE '%bio_policy%' OR \
+error_json LIKE '%bioPolicy%' OR \
+error_json LIKE '%flagged for possible biological risk%' OR \
+error_json LIKE '%Invalid prompt: we''ve limited access%')";
 
 fn row_to_turn(row: &rusqlite::Row) -> rusqlite::Result<CyberTurn> {
     Ok(CyberTurn {
@@ -257,29 +264,54 @@ fn backup_path_for(db_path: &Path, thread_id: Option<&str>) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Rewrite every `text` part of a `userMessage` item_json into leet speak,
-/// in place. Returns the number of text parts changed. Other item types and
-/// non-text content parts are left untouched, as is `text_elements` (which
-/// records per-span metadata and is empty for plain messages).
+/// Rewrite every user-controlled text into leet speak, in place. Covers two
+/// item shapes: `userMessage` (walks `content[]` where `type='text'`, rewrites
+/// `.text`) and `hookPrompt` (walks `fragments[]`, rewrites `.text` — prompt
+/// fragments hooks inject into the model context). Also clears `textElements`
+/// on any rewritten text part: those record byte ranges for @mentions/skill
+/// spans and would misalign the TUI once we've changed the bytes.
+/// Image/audio/skill/mention content parts are untouched.
 fn leet_encode_user_message(item_json: &str) -> Option<(String, usize)> {
     let mut v: Value = serde_json::from_str(item_json).ok()?;
-    if v.get("type").and_then(Value::as_str) != Some("userMessage") {
-        return None;
-    }
-    let content = v.get_mut("content")?.as_array_mut()?;
+    let item_type = v.get("type").and_then(Value::as_str)?;
     let mut changed = 0usize;
-    for part in content.iter_mut() {
-        if part.get("type").and_then(Value::as_str) != Some("text") {
-            continue;
-        }
-        if let Some(text) = part.get("text").and_then(Value::as_str) {
-            let encoded = leet::encode(text);
-            if encoded != text {
-                part["text"] = Value::String(encoded);
-                changed += 1;
+
+    match item_type {
+        "userMessage" => {
+            let content = v.get_mut("content")?.as_array_mut()?;
+            for part in content.iter_mut() {
+                if part.get("type").and_then(Value::as_str) != Some("text") {
+                    continue;
+                }
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    let encoded = leet::encode(text);
+                    if encoded != text {
+                        part["text"] = Value::String(encoded);
+                        // Byte offsets in textElements are invalid after rewrite.
+                        if let Some(obj) = part.as_object_mut() {
+                            obj.remove("textElements");
+                            obj.remove("text_elements");
+                        }
+                        changed += 1;
+                    }
+                }
             }
         }
+        "hookPrompt" => {
+            let fragments = v.get_mut("fragments")?.as_array_mut()?;
+            for frag in fragments.iter_mut() {
+                if let Some(text) = frag.get("text").and_then(Value::as_str) {
+                    let encoded = leet::encode(text);
+                    if encoded != text {
+                        frag["text"] = Value::String(encoded);
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        _ => return None,
     }
+
     if changed == 0 {
         return None;
     }
@@ -406,6 +438,8 @@ mod tests {
     const TID: &str = "thread-A";
     const CYBER_ERR: &str = r#"{"message":"This content was flagged for possible cybersecurity risk.","codexErrorInfo":"cyberPolicy","additionalDetails":null}"#;
     const MISALIGN_ERR: &str = r#"{"message":"This request violated the misalignment policy.","codexErrorInfo":"misalignmentPolicyViolation","additionalDetails":null}"#;
+    const BIO_ERR: &str = r#"{"message":"This content was flagged for possible biological risk.","codexErrorInfo":"badRequest","additionalDetails":null}"#;
+    const INVALID_PROMPT_ERR: &str = r#"{"message":"Invalid prompt: we've limited access to this content for safety reasons.","codexErrorInfo":"badRequest"}"#;
     const OTHER_ERR: &str = r#"{"message":"network timeout","codexErrorInfo":"io"}"#;
 
     fn unique_db_path() -> PathBuf {
@@ -677,6 +711,58 @@ mod tests {
         cleanup(&path);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].turn_id, "t-mis");
+    }
+
+    fn seed_bio_and_invalid(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE thread_turns (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, error_json TEXT, PRIMARY KEY (thread_id, turn_id));\
+             CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, item_json TEXT NOT NULL, PRIMARY KEY (thread_id, turn_id, item_id));",
+        ).unwrap();
+        for (turn, err) in [("t-bio", BIO_ERR), ("t-inv", INVALID_PROMPT_ERR)] {
+            conn.execute(
+                "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
+                rusqlite::params![TID, turn, 1, "failed", err],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn list_cyber_turns_picks_up_bio_and_invalid_prompt() {
+        let path = unique_db_path();
+        seed_bio_and_invalid(&path);
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut ids: Vec<String> = list_cyber_turns(&conn, Some(TID))
+            .unwrap()
+            .into_iter()
+            .map(|t| t.turn_id)
+            .collect();
+        ids.sort();
+        drop(conn);
+        cleanup(&path);
+        assert_eq!(ids, vec!["t-bio", "t-inv"]);
+    }
+
+    #[test]
+    fn leet_encode_hook_prompt() {
+        let input = r#"{"type":"hookPrompt","fragments":[{"text":"hello world","hookRunId":"h1"},{"text":"scan target"}]}"#;
+        let (out, n) = leet_encode_user_message(input).unwrap();
+        assert_eq!(n, 2);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["fragments"][0]["text"], "h3110 w0r1d");
+        assert_eq!(v["fragments"][0]["hookRunId"], "h1");
+        assert_eq!(v["fragments"][1]["text"], "5c4n 74r637");
+    }
+
+    #[test]
+    fn leet_encode_clears_text_elements() {
+        let input = r#"{"type":"userMessage","content":[{"type":"text","text":"hello","textElements":[{"byteRange":{"start":0,"end":5},"placeholder":"x"}]}]}"#;
+        let (out, n) = leet_encode_user_message(input).unwrap();
+        assert_eq!(n, 1);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["content"][0]["text"], "h3110");
+        assert!(v["content"][0].get("textElements").is_none());
     }
 
     #[test]

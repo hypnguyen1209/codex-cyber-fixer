@@ -1,6 +1,6 @@
 [package]
 name = "codex-cyber-fixer"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Clear the Codex cybersecurity Trusted-Access refusal from a session so `codex resume` keeps working. Fixes the SQLite thread-history store (source of truth) and optionally sanitizes the rollout .jsonl."
 license = "MIT"

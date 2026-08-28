@@ -67,25 +67,31 @@ pub struct CleanResult {
     pub stats: CleanStats,
 }
 
-/// Text signatures of hard-block policy refusals (cyber + misalignment), in any
-/// wording Codex / the backend have used. Compared against the input lowercased,
-/// with apostrophes normalized — so these literals are all lowercase with a
-/// straight quote.
-const REFUSAL_PATTERNS: [&str; 8] = [
+/// Text signatures of hard-block policy refusals (cyber, misalignment, bio),
+/// in any wording Codex / the backend have used. Compared against the input
+/// lowercased, with apostrophes normalized — so these literals are all
+/// lowercase with a straight quote.
+const REFUSAL_PATTERNS: [&str; 12] = [
     // CyberPolicy
     "this content can't be shown",
     "extra caution with cybersecurity",
     "flagged for possible cybersecurity",
+    "flagged for cyber policy",
     "trusted access for cyber",
     "enterprise-trusted-access-for-cyber",
     // MisalignmentPolicyViolation
     "misalignment policy",
     "violated the misalignment policy",
     "blocked due to a misalignment policy",
+    // BioPolicy — rides codex_error_info=badRequest, matched by message content
+    "flagged for possible biological risk",
+    "invalid prompt: we've limited access to this content for safety reasons",
+    "\"code\":\"bio_policy\"",
 ];
 
-/// codex_error_info values that mark a hard-block policy turn. Both stop the
-/// session the same way and are cleared the same way.
+/// codex_error_info values that mark a hard-block policy turn. All stop the
+/// session the same way and are cleared the same way. `bio_policy` is NOT here
+/// because it rides `badRequest`; it is detected by message signature instead.
 const BLOCK_ERROR_INFOS: [&str; 2] = ["cyber_policy", "misalignment_policy_violation"];
 
 fn normalize_apostrophes(s: &str) -> String {
@@ -228,17 +234,37 @@ fn collect_cyber_turn_ids(entries: &[ParsedLine]) -> HashSet<String> {
     ids
 }
 
+/// Identify rollout lines that carry user-controlled text belonging to a turn.
+/// Three shapes carry it:
+///   - `response_item` with `payload.role == "user"` (legacy / model-facing)
+///   - `event_msg` payload `item_started` / `item_completed` whose `.item.type`
+///     is `"UserMessage"` (mixed case — TurnItem enum has no rename_all) or
+///     `"HookPrompt"`
 fn is_user_message(obj: &Value) -> bool {
-    obj.get("type").and_then(Value::as_str) == Some("response_item")
+    if obj.get("type").and_then(Value::as_str) == Some("response_item")
         && str_at(obj, &["payload", "role"]) == Some("user")
+    {
+        return true;
+    }
+    if obj.get("type").and_then(Value::as_str) == Some("event_msg") {
+        let ptype = str_at(obj, &["payload", "type"]).unwrap_or("");
+        if ptype == "item_started" || ptype == "item_completed" {
+            let itype = str_at(obj, &["payload", "item", "type"]).unwrap_or("");
+            if itype == "UserMessage" || itype == "HookPrompt" {
+                return true;
+            }
+        }
+    }
+    false
 }
 
-/// Leet-encode text parts of a user message line. Returns None if nothing changed.
-fn leet_encode_rollout_user_msg(obj: &Value) -> Option<(Value, usize)> {
-    let content = obj.get("payload")?.get("content")?.as_array()?;
-    let mut new_content = content.clone();
+/// Encode text parts inside a content array (in place). Handles both the v2
+/// UserInput `type: "text"` shape (with optional `textElements` byte-range
+/// metadata that MUST be cleared after rewrite) and the legacy Responses-API
+/// `input_text` shape.
+fn leet_encode_content_array(content: &mut [Value]) -> usize {
     let mut changed = 0usize;
-    for part in new_content.iter_mut() {
+    for part in content.iter_mut() {
         let ptype = part.get("type").and_then(Value::as_str).unwrap_or("");
         if ptype != "text" && ptype != "input_text" {
             continue;
@@ -247,15 +273,59 @@ fn leet_encode_rollout_user_msg(obj: &Value) -> Option<(Value, usize)> {
             let encoded = leet::encode(text);
             if encoded != text {
                 part["text"] = Value::String(encoded);
+                if let Some(obj) = part.as_object_mut() {
+                    obj.remove("textElements");
+                    obj.remove("text_elements");
+                }
                 changed += 1;
             }
         }
     }
+    changed
+}
+
+fn leet_encode_fragments(fragments: &mut [Value]) -> usize {
+    let mut changed = 0usize;
+    for frag in fragments.iter_mut() {
+        if let Some(text) = frag.get("text").and_then(Value::as_str) {
+            let encoded = leet::encode(text);
+            if encoded != text {
+                frag["text"] = Value::String(encoded);
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+/// Leet-encode a rollout line's user text. Returns None if nothing changed.
+fn leet_encode_rollout_user_msg(obj: &Value) -> Option<(Value, usize)> {
+    let outer_type = obj.get("type").and_then(Value::as_str)?;
+    let mut new_obj = obj.clone();
+    let changed = match outer_type {
+        "response_item" => {
+            let content = new_obj
+                .get_mut("payload")?
+                .get_mut("content")?
+                .as_array_mut()?;
+            leet_encode_content_array(content)
+        }
+        "event_msg" => {
+            let item = new_obj.get_mut("payload")?.get_mut("item")?;
+            let itype = item.get("type").and_then(Value::as_str)?;
+            match itype {
+                "UserMessage" => {
+                    leet_encode_content_array(item.get_mut("content")?.as_array_mut()?)
+                }
+                "HookPrompt" => leet_encode_fragments(item.get_mut("fragments")?.as_array_mut()?),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
     if changed == 0 {
         return None;
     }
-    let mut new_obj = obj.clone();
-    new_obj["payload"]["content"] = Value::Array(new_content);
     Some((new_obj, changed))
 }
 
@@ -526,6 +596,72 @@ mod tests {
         assert!(is_refusal_str(
             "This request was blocked due to a misalignment policy violation."
         ));
+        // BioPolicy wordings.
+        assert!(is_refusal_str(
+            "This content was flagged for possible biological risk."
+        ));
+        assert!(is_refusal_str(
+            "Invalid prompt: we've limited access to this content for safety reasons."
+        ));
+        assert!(is_refusal_str(
+            r#"{"error":{"code":"bio_policy","message":"…"}}"#
+        ));
+        // Additional cyber wordings.
+        assert!(is_refusal_str("This request was flagged for cyber policy."));
+    }
+
+    #[test]
+    fn bio_and_invalid_prompt_task_complete_are_neutralized() {
+        let bio = json!({
+            "type":"event_msg",
+            "payload":{"type":"task_complete","turn_id":"T1","last_agent_message":null,
+                "error":{"message":"This content was flagged for possible biological risk.","codex_error_info":"bad_request"}}
+        }).to_string();
+        let r = clean_rollout(&bio, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+
+        let inv = json!({
+            "type":"event_msg",
+            "payload":{"type":"task_complete","turn_id":"T2","last_agent_message":null,
+                "error":{"message":"Invalid prompt: we've limited access to this content for safety reasons.","codex_error_info":"bad_request"}}
+        }).to_string();
+        let r = clean_rollout(&inv, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+
+        let embedded_bio = json!({
+            "type":"event_msg",
+            "payload":{"type":"task_complete","turn_id":"T3","last_agent_message":null,
+                "error":{"message":"{\"error\":{\"code\":\"bio_policy\",\"message\":\"blocked\"}}","codex_error_info":"bad_request"}}
+        }).to_string();
+        let r = clean_rollout(&embedded_bio, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+    }
+
+    #[test]
+    fn leet_handles_hook_prompt_and_event_msg_user_message() {
+        let hook_line = json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","turn_id":"T1",
+                "item":{"type":"HookPrompt","id":"i1","fragments":[{"text":"hello world","hookRunId":"h1"}]}}
+        });
+        let (out, n) = leet_encode_rollout_user_msg(&hook_line).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            out["payload"]["item"]["fragments"][0]["text"],
+            "h3110 w0r1d"
+        );
+
+        let event_user_line = json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","turn_id":"T1",
+                "item":{"type":"UserMessage","id":"i2","content":[{"type":"text","text":"scan target","textElements":[{"byteRange":{"start":0,"end":4}}]}]}}
+        });
+        let (out, n) = leet_encode_rollout_user_msg(&event_user_line).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(out["payload"]["item"]["content"][0]["text"], "5c4n 74r637");
+        assert!(out["payload"]["item"]["content"][0]
+            .get("textElements")
+            .is_none());
     }
 
     #[test]

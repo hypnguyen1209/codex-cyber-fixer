@@ -1,8 +1,8 @@
 # codex-cyber-fixer
 
-Clear hard-block policy refusals — **cybersecurity Trusted Access** and
-**misalignment policy violation** — from a Codex session so `codex resume`
-keeps working instead of getting stuck on:
+Clear hard-block policy refusals — **cybersecurity Trusted Access**,
+**misalignment policy violation**, and **bio/safety-access** — from a Codex
+session so `codex resume` keeps working instead of getting stuck on:
 
 ```
 This content can't be shown
@@ -37,10 +37,17 @@ So editing the `.jsonl` does **not** unblock a session (and it desyncs byte
 offsets the DB records). You must fix the **DB** — the default `db` subcommand.
 
 In the DB, a hard-blocked turn is a `thread_turns` row with `status='failed'`
-and an `error_json` whose `codexErrorInfo` is `cyberPolicy` **or**
-`misalignmentPolicyViolation` — both stop resume the same way and are cleared
-the same way. (The "This content can't be shown" text is never stored — it's
-just how the TUI renders that row.) Three ways to fix it:
+and an `error_json` marker. Three policies share the exact same UX (composer
+locked, resume stuck) and are cleared the same way:
+
+| Policy | `codexErrorInfo` | Detected via |
+|--------|------------------|--------------|
+| CyberPolicy | `cyberPolicy` | typed marker |
+| MisalignmentPolicyViolation | `misalignmentPolicyViolation` | typed marker |
+| BioPolicy / safety-access | `badRequest` | message signature (`bio_policy`, `"flagged for possible biological risk"`, `"Invalid prompt: we've limited access…"`) |
+
+(The "This content can't be shown" text is never stored — it's just how the TUI
+renders that row.) Three ways to fix it:
 
 | `--mode` | Effect on the blocked turn | Keeps user msg? |
 |----------|----------------------------|:---------------:|
@@ -190,9 +197,11 @@ Substitution table (encode direction):
 | Z | 2 |
 
 Encoding is deterministic (one canonical substitution per letter). Punctuation,
-digits, whitespace, and non-ASCII characters are preserved verbatim. Only
-`userMessage` content parts with `type: "text"` are rewritten; other item types
-and metadata are untouched.
+digits, whitespace, and non-ASCII characters are preserved verbatim. Rewrites
+two user-controlled shapes: `userMessage` content parts (`type: "text"`) and
+`hookPrompt` fragments. `textElements` byte-range metadata (@mention / skill
+spans) is cleared after rewrite so the TUI doesn't misalign into the encoded
+bytes. Image/audio/skill/mention parts are untouched.
 
 A **decoder** (`leet::decode`) is also included for the reverse direction — it
 uses context-aware disambiguation with a common-word lexicon to pick the most
