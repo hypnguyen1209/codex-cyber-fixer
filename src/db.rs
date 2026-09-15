@@ -345,13 +345,14 @@ pub fn clean_thread_history_db(
         });
     }
 
-    // Backup the exact rows we are about to change (turns + their items for
-    // drop-turn). Gather BEFORE the transaction so drop-turn items still exist.
+    // Backup the exact rows we are about to change (turns + their items when
+    // either drop-turn will delete them or leet mode will rewrite item_json).
+    // Gather BEFORE the transaction so a rollback still preserves the snapshot.
     let mut backup = Map::new();
     backup.insert("dbPath".into(), json!(db_path.to_string_lossy()));
     backup.insert("mode".into(), json!(mode.as_str()));
     backup.insert("turns".into(), turns_to_json(&turns));
-    if mode == DbMode::DropTurn {
+    if mode == DbMode::DropTurn || mode == DbMode::Leet {
         for t in &turns {
             let items = rows_to_json(
                 &conn,
@@ -711,6 +712,23 @@ mod tests {
         cleanup(&path);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].turn_id, "t-mis");
+    }
+
+    #[test]
+    fn leet_mode_backs_up_items_before_rewrite() {
+        let path = unique_db_path();
+        seed_with_user_messages(&path);
+        clean_thread_history_db(&path, DbMode::Leet, Some(TID), false).unwrap();
+        let backup = backup_path_for(&path, Some(TID));
+        let content = std::fs::read_to_string(&backup).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        // items backup should exist and contain the original text.
+        let items = parsed["items:t-cyber1"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let original_json: Value =
+            serde_json::from_str(items[0]["item_json"].as_str().unwrap()).unwrap();
+        assert_eq!(original_json["content"][0]["text"], "hello world");
+        cleanup(&path);
     }
 
     fn seed_bio_and_invalid(path: &Path) {

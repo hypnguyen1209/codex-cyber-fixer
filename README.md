@@ -63,6 +63,13 @@ falsely claim the model produced output.
 from the timeline. Use `leet` to unblock **and** obfuscate the user message so a
 re-scan no longer matches the cyber signature.
 
+> **Caveat for `--full`.** Cleaning the rollout `.jsonl` changes line lengths.
+> Codex tracks a byte watermark in `thread_history_projection_state` and will
+> emit `"durable rollout shrank before projection"` on the next resume if the
+> file becomes shorter than the watermark. The tool writes a `.bak` first —
+> restore it if you see that error. Prefer plain `db` mode over `--full`; the
+> DB is the only source of truth for resume anyway.
+
 ## Architecture
 
 One binary, one dispatcher, two independent cleaners over two separate stores.
