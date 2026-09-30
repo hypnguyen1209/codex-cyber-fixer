@@ -1,8 +1,9 @@
 # codex-cyber-fixer
 
-Clear hard-block policy refusals — **cybersecurity Trusted Access**,
-**misalignment policy violation**, and **bio/safety-access** — from a Codex
-session so `codex resume` keeps working instead of getting stuck on:
+Clear hard-block / non-recoverable failures — **cybersecurity Trusted Access**,
+**misalignment policy violation**, **bio/safety-access**, **invalid prompt**,
+and **Flex capacity unavailable** — from a Codex session so `codex resume`
+keeps working instead of getting stuck on:
 
 ```
 This content can't be shown
@@ -40,11 +41,13 @@ In the DB, a hard-blocked turn is a `thread_turns` row with `status='failed'`
 and an `error_json` marker. Three policies share the exact same UX (composer
 locked, resume stuck) and are cleared the same way:
 
-| Policy | `codexErrorInfo` | Detected via |
-|--------|------------------|--------------|
+| Failure | `codexErrorInfo` | Detected via |
+|---------|------------------|--------------|
 | CyberPolicy | `cyberPolicy` | typed marker |
 | MisalignmentPolicyViolation | `misalignmentPolicyViolation` | typed marker |
-| BioPolicy / safety-access | `badRequest` | message signature (`bio_policy`, `"flagged for possible biological risk"`, `"Invalid prompt: we've limited access…"`) |
+| BioPolicy / safety-access | `other` (v2 wire) | message signature (`bio_policy`, `"flagged for possible biological risk"`) |
+| InvalidPrompt | `other` (v2 wire) | message prefix `"Invalid prompt:"` |
+| FlexUnavailable | `flexUnavailable` | typed marker + message `"Flex capacity unavailable."` |
 
 (The "This content can't be shown" text is never stored — it's just how the TUI
 renders that row.) Three ways to fix it:

@@ -150,12 +150,14 @@ pub fn find_thread_history_dbs(
     found
 }
 
-/// SQL predicate identifying a policy-blocked turn. Covers the three hard-block
-/// policies Codex enforces the same way (status='failed' + typed error_json):
-/// CyberPolicy, MisalignmentPolicyViolation, and BioPolicy (which rides
-/// codex_error_info=badRequest but is detected by message prefix — same UX,
-/// composer locked). Matches both machine markers and human wording, resilient
-/// across Codex builds. Apostrophes in literals are doubled per SQL syntax.
+/// SQL predicate identifying a hard-block / non-recoverable turn Codex would
+/// otherwise refuse to resume. Covers five failure shapes Codex enforces the
+/// same way (status='failed' + typed error_json): `CyberPolicy` (typed
+/// marker), `MisalignmentPolicyViolation` (typed marker), `BioPolicy` and
+/// `InvalidPrompt` (v2 maps both to `other`; matched by message), and
+/// `FlexUnavailable` (typed marker). Matches both machine markers and human
+/// wording, resilient across Codex builds. Apostrophes in literals are doubled
+/// per SQL syntax.
 const CYBER_WHERE: &str = "status = 'failed' AND error_json IS NOT NULL AND (\
 error_json LIKE '%cyberPolicy%' OR \
 error_json LIKE '%cyber_policy%' OR \
@@ -168,7 +170,10 @@ error_json LIKE '%misalignment policy%' OR \
 error_json LIKE '%bio_policy%' OR \
 error_json LIKE '%bioPolicy%' OR \
 error_json LIKE '%flagged for possible biological risk%' OR \
-error_json LIKE '%Invalid prompt: we''ve limited access%')";
+error_json LIKE '%Invalid prompt:%' OR \
+error_json LIKE '%flexUnavailable%' OR \
+error_json LIKE '%flex_unavailable%' OR \
+error_json LIKE '%Flex capacity unavailable%')";
 
 fn row_to_turn(row: &rusqlite::Row) -> rusqlite::Result<CyberTurn> {
     Ok(CyberTurn {
@@ -439,8 +444,10 @@ mod tests {
     const TID: &str = "thread-A";
     const CYBER_ERR: &str = r#"{"message":"This content was flagged for possible cybersecurity risk.","codexErrorInfo":"cyberPolicy","additionalDetails":null}"#;
     const MISALIGN_ERR: &str = r#"{"message":"This request violated the misalignment policy.","codexErrorInfo":"misalignmentPolicyViolation","additionalDetails":null}"#;
-    const BIO_ERR: &str = r#"{"message":"This content was flagged for possible biological risk.","codexErrorInfo":"badRequest","additionalDetails":null}"#;
-    const INVALID_PROMPT_ERR: &str = r#"{"message":"Invalid prompt: we've limited access to this content for safety reasons.","codexErrorInfo":"badRequest"}"#;
+    const BIO_ERR: &str = r#"{"message":"This content was flagged for possible biological risk.","codexErrorInfo":"other","additionalDetails":null}"#;
+    const INVALID_PROMPT_ERR: &str = r#"{"message":"Invalid prompt: we've limited access to this content for safety reasons.","codexErrorInfo":"other"}"#;
+    const FLEX_ERR: &str =
+        r#"{"message":"Flex capacity unavailable.","codexErrorInfo":"flexUnavailable"}"#;
     const OTHER_ERR: &str = r#"{"message":"network timeout","codexErrorInfo":"io"}"#;
 
     fn unique_db_path() -> PathBuf {
@@ -737,7 +744,11 @@ mod tests {
             "CREATE TABLE thread_turns (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, status TEXT NOT NULL, error_json TEXT, PRIMARY KEY (thread_id, turn_id));\
              CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, item_json TEXT NOT NULL, PRIMARY KEY (thread_id, turn_id, item_id));",
         ).unwrap();
-        for (turn, err) in [("t-bio", BIO_ERR), ("t-inv", INVALID_PROMPT_ERR)] {
+        for (turn, err) in [
+            ("t-bio", BIO_ERR),
+            ("t-inv", INVALID_PROMPT_ERR),
+            ("t-flex", FLEX_ERR),
+        ] {
             conn.execute(
                 "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
                 rusqlite::params![TID, turn, 1, "failed", err],
@@ -747,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn list_cyber_turns_picks_up_bio_and_invalid_prompt() {
+    fn list_cyber_turns_picks_up_bio_invalid_prompt_and_flex() {
         let path = unique_db_path();
         seed_bio_and_invalid(&path);
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -759,7 +770,7 @@ mod tests {
         ids.sort();
         drop(conn);
         cleanup(&path);
-        assert_eq!(ids, vec!["t-bio", "t-inv"]);
+        assert_eq!(ids, vec!["t-bio", "t-flex", "t-inv"]);
     }
 
     #[test]

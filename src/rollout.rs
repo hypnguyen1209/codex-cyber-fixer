@@ -67,11 +67,12 @@ pub struct CleanResult {
     pub stats: CleanStats,
 }
 
-/// Text signatures of hard-block policy refusals (cyber, misalignment, bio),
-/// in any wording Codex / the backend have used. Compared against the input
-/// lowercased, with apostrophes normalized — so these literals are all
-/// lowercase with a straight quote.
-const REFUSAL_PATTERNS: [&str; 12] = [
+/// Text signatures of hard-block / non-recoverable refusals (cyber,
+/// misalignment, bio, invalid_prompt, flex-unavailable) in any wording Codex
+/// / the backend have used. Compared against the input lowercased, with
+/// apostrophes normalized — so these literals are all lowercase with a
+/// straight quote.
+const REFUSAL_PATTERNS: [&str; 14] = [
     // CyberPolicy
     "this content can't be shown",
     "extra caution with cybersecurity",
@@ -83,16 +84,23 @@ const REFUSAL_PATTERNS: [&str; 12] = [
     "misalignment policy",
     "violated the misalignment policy",
     "blocked due to a misalignment policy",
-    // BioPolicy — rides codex_error_info=badRequest, matched by message content
+    // BioPolicy + InvalidPrompt — v2 wire maps both to `other`, matched by message.
     "flagged for possible biological risk",
-    "invalid prompt: we've limited access to this content for safety reasons",
+    "invalid prompt:",
     "\"code\":\"bio_policy\"",
+    // FlexUnavailable — capacity exhaustion, persists as failed the same way.
+    "flex capacity unavailable",
+    "\"code\":\"flex_unavailable\"",
 ];
 
-/// codex_error_info values that mark a hard-block policy turn. All stop the
-/// session the same way and are cleared the same way. `bio_policy` is NOT here
-/// because it rides `badRequest`; it is detected by message signature instead.
-const BLOCK_ERROR_INFOS: [&str; 2] = ["cyber_policy", "misalignment_policy_violation"];
+/// codex_error_info values that mark a hard-block / non-recoverable turn. All
+/// stop the session the same way and are cleared the same way. `bio_policy` and
+/// `invalid_prompt` are NOT here — v2 maps them to `other`; detected by message.
+const BLOCK_ERROR_INFOS: [&str; 3] = [
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "flex_unavailable",
+];
 
 fn normalize_apostrophes(s: &str) -> String {
     s.chars()
@@ -608,6 +616,22 @@ mod tests {
         ));
         // Additional cyber wordings.
         assert!(is_refusal_str("This request was flagged for cyber policy."));
+        // FlexUnavailable wording.
+        assert!(is_refusal_str("Flex capacity unavailable."));
+        assert!(is_refusal_str(r#"{"error":{"code":"flex_unavailable"}}"#));
+    }
+
+    #[test]
+    fn flex_unavailable_task_complete_is_neutralized() {
+        let flex = json!({
+            "type":"event_msg",
+            "payload":{"type":"task_complete","turn_id":"T1","last_agent_message":null,
+                "error":{"message":"Flex capacity unavailable.","codex_error_info":"flex_unavailable"}}
+        }).to_string();
+        let r = clean_rollout(&flex, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+        let out = parse_lines(&r.output);
+        assert!(out[0]["payload"]["error"].is_null());
     }
 
     #[test]
