@@ -2,8 +2,8 @@
 
 Clear hard-block / non-recoverable failures — **cybersecurity Trusted Access**,
 **misalignment policy violation**, **bio/safety-access**, **invalid prompt**,
-and **Flex capacity unavailable** — from a Codex session so `codex resume`
-keeps working instead of getting stuck on:
+**Flex capacity unavailable**, and **incomplete response** — from a Codex
+session so `codex resume` keeps working instead of getting stuck on:
 
 ```
 This content can't be shown
@@ -48,6 +48,7 @@ locked, resume stuck) and are cleared the same way:
 | BioPolicy / safety-access | `other` (v2 wire) | message signature (`bio_policy`, `"flagged for possible biological risk"`) |
 | InvalidPrompt | `other` (v2 wire) | message prefix `"Invalid prompt:"` |
 | FlexUnavailable | `flexUnavailable` | typed marker + message `"Flex capacity unavailable."` |
+| ResponseIncomplete | `other` (v2 wire) | message `"Incomplete response returned, reason: …"` (non-retryable: `max_output_tokens`, `max_tool_calls`) |
 
 (The "This content can't be shown" text is never stored — it's just how the TUI
 renders that row.) Three ways to fix it:

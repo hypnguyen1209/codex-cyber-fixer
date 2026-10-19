@@ -72,7 +72,7 @@ pub struct CleanResult {
 /// / the backend have used. Compared against the input lowercased, with
 /// apostrophes normalized — so these literals are all lowercase with a
 /// straight quote.
-const REFUSAL_PATTERNS: [&str; 14] = [
+const REFUSAL_PATTERNS: [&str; 15] = [
     // CyberPolicy
     "this content can't be shown",
     "extra caution with cybersecurity",
@@ -91,6 +91,8 @@ const REFUSAL_PATTERNS: [&str; 14] = [
     // FlexUnavailable — capacity exhaustion, persists as failed the same way.
     "flex capacity unavailable",
     "\"code\":\"flex_unavailable\"",
+    // ResponseIncomplete — reason: max_output_tokens / max_tool_calls, non-retryable.
+    "incomplete response returned",
 ];
 
 /// codex_error_info values that mark a hard-block / non-recoverable turn. All
@@ -619,6 +621,26 @@ mod tests {
         // FlexUnavailable wording.
         assert!(is_refusal_str("Flex capacity unavailable."));
         assert!(is_refusal_str(r#"{"error":{"code":"flex_unavailable"}}"#));
+        // ResponseIncomplete wording.
+        assert!(is_refusal_str(
+            "Incomplete response returned, reason: max_output_tokens"
+        ));
+        assert!(is_refusal_str(
+            "stream error: Incomplete response returned, reason: max_tool_calls"
+        ));
+    }
+
+    #[test]
+    fn incomplete_response_task_complete_is_neutralized() {
+        let incomplete = json!({
+            "type":"event_msg",
+            "payload":{"type":"task_complete","turn_id":"T1","last_agent_message":null,
+                "error":{"message":"stream error: Incomplete response returned, reason: max_output_tokens","codex_error_info":"other"}}
+        }).to_string();
+        let r = clean_rollout(&incomplete, CleanMode::Neutralize);
+        assert_eq!(r.stats.events_neutralized, 1);
+        let out = parse_lines(&r.output);
+        assert!(out[0]["payload"]["error"].is_null());
     }
 
     #[test]

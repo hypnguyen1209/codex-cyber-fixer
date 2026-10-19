@@ -151,13 +151,13 @@ pub fn find_thread_history_dbs(
 }
 
 /// SQL predicate identifying a hard-block / non-recoverable turn Codex would
-/// otherwise refuse to resume. Covers five failure shapes Codex enforces the
+/// otherwise refuse to resume. Covers six failure shapes Codex enforces the
 /// same way (status='failed' + typed error_json): `CyberPolicy` (typed
-/// marker), `MisalignmentPolicyViolation` (typed marker), `BioPolicy` and
-/// `InvalidPrompt` (v2 maps both to `other`; matched by message), and
-/// `FlexUnavailable` (typed marker). Matches both machine markers and human
-/// wording, resilient across Codex builds. Apostrophes in literals are doubled
-/// per SQL syntax.
+/// marker), `MisalignmentPolicyViolation` (typed marker), `BioPolicy` /
+/// `InvalidPrompt` / `ResponseIncomplete` (v2 maps all three to `other`;
+/// matched by message), and `FlexUnavailable` (typed marker). Matches both
+/// machine markers and human wording, resilient across Codex builds.
+/// Apostrophes in literals are doubled per SQL syntax.
 const CYBER_WHERE: &str = "status = 'failed' AND error_json IS NOT NULL AND (\
 error_json LIKE '%cyberPolicy%' OR \
 error_json LIKE '%cyber_policy%' OR \
@@ -173,7 +173,8 @@ error_json LIKE '%flagged for possible biological risk%' OR \
 error_json LIKE '%Invalid prompt:%' OR \
 error_json LIKE '%flexUnavailable%' OR \
 error_json LIKE '%flex_unavailable%' OR \
-error_json LIKE '%Flex capacity unavailable%')";
+error_json LIKE '%Flex capacity unavailable%' OR \
+error_json LIKE '%Incomplete response returned%')";
 
 fn row_to_turn(row: &rusqlite::Row) -> rusqlite::Result<CyberTurn> {
     Ok(CyberTurn {
@@ -448,6 +449,7 @@ mod tests {
     const INVALID_PROMPT_ERR: &str = r#"{"message":"Invalid prompt: we've limited access to this content for safety reasons.","codexErrorInfo":"other"}"#;
     const FLEX_ERR: &str =
         r#"{"message":"Flex capacity unavailable.","codexErrorInfo":"flexUnavailable"}"#;
+    const INCOMPLETE_ERR: &str = r#"{"message":"stream error: Incomplete response returned, reason: max_output_tokens","codexErrorInfo":"other"}"#;
     const OTHER_ERR: &str = r#"{"message":"network timeout","codexErrorInfo":"io"}"#;
 
     fn unique_db_path() -> PathBuf {
@@ -748,6 +750,7 @@ mod tests {
             ("t-bio", BIO_ERR),
             ("t-inv", INVALID_PROMPT_ERR),
             ("t-flex", FLEX_ERR),
+            ("t-incomp", INCOMPLETE_ERR),
         ] {
             conn.execute(
                 "INSERT INTO thread_turns VALUES (?,?,?,?,?)",
@@ -758,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn list_cyber_turns_picks_up_bio_invalid_prompt_and_flex() {
+    fn list_cyber_turns_picks_up_all_non_recoverable_shapes() {
         let path = unique_db_path();
         seed_bio_and_invalid(&path);
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -770,7 +773,7 @@ mod tests {
         ids.sort();
         drop(conn);
         cleanup(&path);
-        assert_eq!(ids, vec!["t-bio", "t-flex", "t-inv"]);
+        assert_eq!(ids, vec!["t-bio", "t-flex", "t-incomp", "t-inv"]);
     }
 
     #[test]
